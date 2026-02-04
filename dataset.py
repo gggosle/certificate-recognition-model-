@@ -72,6 +72,21 @@ class CertificateDataset(Dataset):
 
         return inter / inner_area
 
+    def split_line_bbox_weighted(self, bbox, words):
+        x1, y1, x2, y2 = bbox
+        total_chars = sum(len(w) for w in words)
+        cur_x = x1
+
+        boxes = []
+        for w in words:
+            w_width = (len(w) / total_chars) * (x2 - x1)
+            wx1 = int(cur_x)
+            wx2 = int(cur_x + w_width)
+            boxes.append([wx1, y1, wx2, y2])
+            cur_x = wx2
+
+        return boxes
+
     def __getitem__(self, idx):
         try:
             return self._process_item(idx)
@@ -112,7 +127,6 @@ class CertificateDataset(Dataset):
                 ]
 
                 # Normalize boxes to 0-1000 scale
-                pixel_bbox = bbox  # keep pixel coords for IoU
                 norm_bbox = [
                     int(1000 * (bbox[0] / width)),
                     int(1000 * (bbox[1] / height)),
@@ -122,9 +136,10 @@ class CertificateDataset(Dataset):
 
                 # Split text into words and duplicate the bbox for each word
                 line_words = text.split()
+
                 words.extend(line_words)
-                word_pixel_boxes.extend([pixel_bbox] * len(line_words))
-                word_boxes.extend([norm_bbox] * len(line_words))
+                word_pixel_boxes.extend(self.split_line_bbox_weighted(bbox, line_words)) #[data, data... []?]
+                word_boxes.extend(self.split_line_bbox_weighted(norm_bbox, line_words))
 
         # Print debug info
         print(f"Words: {words}")
@@ -153,7 +168,7 @@ class CertificateDataset(Dataset):
             word_boxes = [[0,0,1,1]]
             ner_tags = [0]
 
-        debug_draw(image, word_boxes, ground_truth)
+        debug_draw(image, word_pixel_boxes, ground_truth)
         print(f"NER Tags: {ner_tags}")
         print(words)
         print(word_boxes)
