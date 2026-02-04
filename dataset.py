@@ -6,6 +6,13 @@ from transformers import LayoutLMv3Processor
 from ocr_init import get_ocr_engine
 import os
 
+import json
+import numpy as np
+from PIL import Image
+from torch.utils.data import Dataset
+from transformers import LayoutLMv3Processor
+import os
+
 class CertificateDataset(Dataset):
     def __init__(self, image_dir, label_dir, processor, label_list):
         self.image_dir = image_dir
@@ -49,24 +56,21 @@ class CertificateDataset(Dataset):
             })
         return ground_truth
 
-    def _iou(self, boxA, boxB):
-        xA = max(boxA[0], boxB[0])
-        yA = max(boxA[1], boxB[1])
-        xB = min(boxA[2], boxB[2])
-        yB = min(boxA[3], boxB[3])
+    def box_inside_ratio(self, inner, outer):
+        xA = max(inner[0], outer[0])
+        yA = max(inner[1], outer[1])
+        xB = min(inner[2], outer[2])
+        yB = min(inner[3], outer[3])
 
         inter_w = max(0, xB - xA)
         inter_h = max(0, yB - yA)
-        interArea = inter_w * inter_h
+        inter = inter_w * inter_h
 
-        if interArea == 0:
+        inner_area = (inner[2] - inner[0]) * (inner[3] - inner[1])
+        if inner_area == 0:
             return 0.0
 
-        boxAArea = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
-        boxBArea = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
-
-        union = boxAArea + boxBArea - interArea
-        return interArea / (union + 1e-6)
+        return inter / inner_area
 
     def __getitem__(self, idx):
         try:
@@ -86,56 +90,59 @@ class CertificateDataset(Dataset):
         ocr_result = self.ocr_engine.predict(image_path)
         words = []
         word_boxes = []
-        
+        word_pixel_boxes = []
+
         for res in ocr_result:
             texts = res["rec_texts"]
             scores = res["rec_scores"]
             polys = res["rec_polys"]
-            
+
             for text, score, poly in zip(texts, scores, polys):
                 if not text.strip() or score < 0.6:  # Skip empty text and low confidence detections
                     continue
-                    
+
                 # Convert polygon to bbox [x0, y0, x1, y1]
                 xs = poly[:, 0]
                 ys = poly[:, 1]
                 bbox = [
-                    int(xs.min()), 
+                    int(xs.min()),
                     int(ys.min()),
-                    int(xs.max()), 
+                    int(xs.max()),
                     int(ys.max())
                 ]
-                
+
                 # Normalize boxes to 0-1000 scale
+                pixel_bbox = bbox  # keep pixel coords for IoU
                 norm_bbox = [
                     int(1000 * (bbox[0] / width)),
                     int(1000 * (bbox[1] / height)),
                     int(1000 * (bbox[2] / width)),
                     int(1000 * (bbox[3] / height)),
                 ]
-                
+
                 # Split text into words and duplicate the bbox for each word
                 line_words = text.split()
                 words.extend(line_words)
+                word_pixel_boxes.extend([pixel_bbox] * len(line_words))
                 word_boxes.extend([norm_bbox] * len(line_words))
-        
+
         # Print debug info
         print(f"Words: {words}")
         print(f"Number of words: {len(words)}")
         print(f"Number of boxes: {len(word_boxes)}")
-        
+
         if not words:
             raise ValueError("No text detected in the image or all text was filtered out")
-        
+
         # 2. Load Ground Truth
         ground_truth = self._load_labelme_boxes(json_path, width, height)
 
         # 3. Match
         ner_tags = []
-        for word_box in word_boxes:
+        for word_box in word_pixel_boxes:
             label_found = "O"
             for gt in ground_truth:
-                if self._iou(word_box, gt['box']) > 0.3:
+                if self.box_inside_ratio(word_box, gt['box']) > 0.6:
                     label_found = gt['label']
                     break
             ner_tags.append(self.label2id.get(label_found, 0))
@@ -146,14 +153,15 @@ class CertificateDataset(Dataset):
             word_boxes = [[0,0,1,1]]
             ner_tags = [0]
 
+        debug_draw(image, word_boxes, ground_truth)
         print(f"NER Tags: {ner_tags}")
         print(words)
         print(word_boxes)
-        
+
         encoding = self.processor(
             image,
             words,
-            boxes=word_boxes,  # Now one box per word
+            boxes=word_boxes,
             word_labels=ner_tags,
             truncation=True,
             padding="max_length",
@@ -162,23 +170,68 @@ class CertificateDataset(Dataset):
 
         return {k: v.squeeze() for k, v in encoding.items()}
 
+from PIL import ImageDraw
+
+def debug_draw(image, ocr_boxes, gt_boxes):
+    img = image.copy()
+    draw = ImageDraw.Draw(img)
+
+    # OCR boxes → RED
+    for b in ocr_boxes:
+        draw.rectangle(b, outline="red", width=2)
+
+    # GT boxes → GREEN
+    for gt in gt_boxes:
+        draw.rectangle(gt["box"], outline="green", width=3)
+    img.show()
+
 def main():
-    image_path = input("Enter the path to the image file: ").strip('"')
-    if not os.path.exists(image_path):
-        print(f"Error: File not found: {image_path}")
-        return
     IMAGE_DIR = "./certificate-dataset-v1/data/images"
     LABEL_DIR = "./certificate-dataset-v1/data/labels"
-    processor = LayoutLMv3Processor.from_pretrained("microsoft/layoutlmv3-base", apply_ocr=False)
-    print("Processing image...")
+    processor = LayoutLMv3Processor.from_pretrained(
+    "microsoft/layoutlmv3-base",
+    apply_ocr=False
+    )
+
     dataset = CertificateDataset(
         image_dir=IMAGE_DIR,
         label_dir=LABEL_DIR,
         processor=processor,
-        label_list=["O", "NAME", "COURSE_NAME", "ISSUER", "OTHER"]  # Update with your actual labels
+        label_list=["O", "NAME", "COURSE_NAME", "ISSUER", "DATE", "OTHER"]
     )
-   
-    item = dataset._process_item(0) 
+
+    # Force-debug ONE sample
+    idx = 2
+    file_name = dataset.image_files[idx]
+    image_path = os.path.join(IMAGE_DIR, file_name)
+    json_path = os.path.join(LABEL_DIR, file_name.replace(".jpg", ".json").replace(".png", ".json").replace(".jpeg", ".json"))
+
+    image = Image.open(image_path).convert("RGB")
+    width, height = image.size
+
+    gt = dataset._load_labelme_boxes(json_path, width, height)
+
+    ocr_result = dataset.ocr_engine.predict(image_path)
+
+    ocr_pixel_boxes = []
+    for res in ocr_result:
+        for poly in res["rec_polys"]:
+            xs = poly[:, 0]
+            ys = poly[:, 1]
+            ocr_pixel_boxes.append([
+                int(xs.min()), int(ys.min()),
+                int(xs.max()), int(ys.max())
+            ])
+
+    print("DEBUG:")
+    print("Image size:", width, height)
+    print("OCR boxes (pixel):", ocr_pixel_boxes[:5])
+    print("GT boxes (pixel):", [g["box"] for g in gt])
+    dataset._process_item(idx)
+
+    
 
 if __name__ == "__main__":
-    main()        
+    main()
+
+
