@@ -54,6 +54,21 @@ def extract_ocr_lines(ocr_result, min_score=0.6):
 
     return items
 
+def split_line_bbox_weighted(bbox, words):
+        x1, y1, x2, y2 = bbox
+        total_chars = sum(len(w) for w in words)
+        cur_x = x1
+
+        boxes = []
+        for w in words:
+            w_width = (len(w) / total_chars) * (x2 - x1)
+            wx1 = int(cur_x)
+            wx2 = int(cur_x + w_width)
+            boxes.append([wx1, y1, wx2, y2])
+            cur_x = wx2
+
+        return boxes
+
 def process_single_image(image_path, model, processor):
     """Process a single image through the model."""
     # Load and process image
@@ -65,26 +80,26 @@ def process_single_image(image_path, model, processor):
     ocr_result = ocr_engine.predict(image_path)
     words = []
     word_boxes = []
-    
+
     for res in ocr_result:
         texts = res["rec_texts"]
         scores = res["rec_scores"]
         polys = res["rec_polys"]
-        
+
         for text, score, poly in zip(texts, scores, polys):
             if not text.strip() or score < 0.6:  # Skip empty text and low confidence detections
                 continue
-                
+
             # Convert polygon to bbox [x0, y0, x1, y1]
             xs = poly[:, 0]
             ys = poly[:, 1]
             bbox = [
-                int(xs.min()), 
+                int(xs.min()),
                 int(ys.min()),
-                int(xs.max()), 
+                int(xs.max()),
                 int(ys.max())
             ]
-            
+
             # Normalize boxes to 0-1000 scale
             norm_bbox = [
                 int(1000 * (bbox[0] / width)),
@@ -92,17 +107,20 @@ def process_single_image(image_path, model, processor):
                 int(1000 * (bbox[2] / width)),
                 int(1000 * (bbox[3] / height)),
             ]
+
             
+
             # Split text into words and duplicate the bbox for each word
             line_words = text.split()
+
             words.extend(line_words)
-            word_boxes.extend([norm_bbox] * len(line_words))
-    
+            word_boxes.extend(split_line_bbox_weighted(norm_bbox, line_words))
+
     # Print debug info
     print(f"Words: {words}")
     print(f"Number of words: {len(words)}")
     print(f"Number of boxes: {len(word_boxes)}")
-    
+
     if not words:
         raise ValueError("No text detected in the image or all text was filtered out")
     
@@ -136,13 +154,19 @@ def visualize_results(image, words, boxes, predictions, output_path):
     """Visualize and save the prediction results."""
     fig, ax = plt.subplots(1, figsize=(12, 15))
     ax.imshow(image)
+    width, height = image.size
     
     for word, box, pred_id in zip(words, boxes, predictions):
         if pred_id == 0:  # Skip 'O' class
             continue
-            
+        denorm_bbox = [
+            int((box[0] / 1000) * width),
+            int((box[1] / 1000) * height),
+            int((box[2] / 1000) * width),
+            int((box[3] / 1000) * height),
+            ]    
         label = LABEL_LIST[pred_id]
-        x1, y1, x2, y2 = box
+        x1, y1, x2, y2 = denorm_bbox
         
         # Draw rectangle
         rect = patches.Rectangle(
@@ -166,6 +190,7 @@ def visualize_results(image, words, boxes, predictions, output_path):
 
 def main():
     # Initialize
+    torch.cuda.empty_cache()
     model, processor = load_model_and_processor()
     
     # Get input image path
@@ -177,7 +202,7 @@ def main():
     # Process image
     print("Processing image...")
     image, words, boxes, predictions = process_single_image(image_path, model, processor)
-    
+    print(predictions)
     # Save results
     output_path = os.path.join(os.path.dirname(image_path), OUTPUT_IMAGE)
     visualize_results(image, words, boxes, predictions, output_path)
