@@ -204,7 +204,7 @@ def main():
     image, words, boxes, predictions = process_single_image(image_path, model, processor)
     print(predictions)
     # Save results
-    output_path = os.path.join(os.path.dirname(image_path), OUTPUT_IMAGE)
+    output_path = os.path.join(os.path.dirname("."), OUTPUT_IMAGE)
     visualize_results(image, words, boxes, predictions, output_path)
     
     print(f"\nProcessing complete! Results saved to: {output_path}")

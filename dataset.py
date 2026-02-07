@@ -56,21 +56,31 @@ class CertificateDataset(Dataset):
             })
         return ground_truth
 
-    def box_inside_ratio(self, inner, outer):
-        xA = max(inner[0], outer[0])
-        yA = max(inner[1], outer[1])
-        xB = min(inner[2], outer[2])
-        yB = min(inner[3], outer[3])
+    def box_overlap_ratio(self, boxA, boxB):
+        # 1. Determine the coordinates of the intersection rectangle
+        xA = max(boxA[0], boxB[0])
+        yA = max(boxA[1], boxB[1])
+        xB = min(boxA[2], boxB[2])
+        yB = min(boxA[3], boxB[3])
 
+        # 2. Compute the area of intersection
         inter_w = max(0, xB - xA)
         inter_h = max(0, yB - yA)
-        inter = inter_w * inter_h
+        inter_area = inter_w * inter_h
 
-        inner_area = (inner[2] - inner[0]) * (inner[3] - inner[1])
-        if inner_area == 0:
+        # 3. Compute the area of both boxes
+        areaA = (boxA[2] - boxA[0]) * (boxA[3] - boxA[1])
+        areaB = (boxB[2] - boxB[0]) * (boxB[3] - boxB[1])
+
+        # 4. Find the smaller area to use as the divisor
+        smaller_area = min(areaA, areaB)
+
+        # Handle potential division by zero if a box has no area
+        if smaller_area <= 0:
             return 0.0
 
-        return inter / inner_area
+        # 5. Return ratio of intersection over the smaller box
+        return inter_area / smaller_area
 
     def split_line_bbox_weighted(self, bbox, words):
         x1, y1, x2, y2 = bbox
@@ -138,8 +148,9 @@ class CertificateDataset(Dataset):
                 line_words = text.split()
 
                 words.extend(line_words)
-                word_pixel_boxes.extend(self.split_line_bbox_weighted(bbox, line_words)) #[data, data... []?]
-                word_boxes.extend(self.split_line_bbox_weighted(norm_bbox, line_words))
+                # Append the same bbox for each word in the line
+                word_boxes.extend([norm_bbox] * len(line_words))
+                word_pixel_boxes.extend([bbox] * len(line_words))
 
         # Print debug info
         print(f"Words: {words}")
@@ -157,7 +168,7 @@ class CertificateDataset(Dataset):
         for word_box in word_pixel_boxes:
             label_found = "O"
             for gt in ground_truth:
-                if self.box_inside_ratio(word_box, gt['box']) > 0.6:
+                if self.box_overlap_ratio(word_box, gt['box']) > 0.6:
                     label_found = gt['label']
                     break
             ner_tags.append(self.label2id.get(label_found, 0))
@@ -168,7 +179,7 @@ class CertificateDataset(Dataset):
             word_boxes = [[0,0,1,1]]
             ner_tags = [0]
 
-        debug_draw(image, word_pixel_boxes, ground_truth)
+        #debug_draw(image, word_pixel_boxes, ground_truth)
         print(f"NER Tags: {ner_tags}")
         print(words)
         print(word_boxes)
@@ -216,7 +227,7 @@ def main():
     )
 
     # Force-debug ONE sample
-    idx = 2
+    idx = 3
     file_name = dataset.image_files[idx]
     image_path = os.path.join(IMAGE_DIR, file_name)
     json_path = os.path.join(LABEL_DIR, file_name.replace(".jpg", ".json").replace(".png", ".json").replace(".jpeg", ".json"))

@@ -11,7 +11,7 @@ from torch.utils.data import random_split
 # 1. Define Labels (MUST match your JSON labels exactly + "O")
 # Standard BIO tagging usually looks like: ["O", "B-NAME", "I-NAME", "B-COURSE", "I-COURSE"...]
 # For simple extraction, just matching the entity name works too.
-label_list = ["O", "NAME", "COURSE_NAME", "ISSUER", "OTHER"]
+label_list = ["O", "NAME", "COURSE_NAME", "ISSUER", "SIGNATURE", "DATE"]
 
 # 2. Setup Processor
 processor = LayoutLMv3Processor.from_pretrained(
@@ -48,7 +48,7 @@ torch.cuda.empty_cache()
 args = TrainingArguments(
     output_dir="layoutlmv3-finetuned-certificates",
 
-    num_train_epochs=5,
+    num_train_epochs=10,
     per_device_train_batch_size=1,   # 🔥 MUST
     per_device_eval_batch_size=1,    # 🔥 MUST
     gradient_accumulation_steps=4,   # keep effective batch = 
