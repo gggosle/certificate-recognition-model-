@@ -11,7 +11,7 @@ from dataset import CertificateDataset
 # Configuration
 MODEL_PATH = "./my_custom_model"
 OUTPUT_IMAGE = "test_output.png"
-LABEL_LIST = ["O", "NAME", "COURSE_NAME", "ISSUER", "OTHER"]
+LABEL_LIST = ["O", "NAME", "COURSE_NAME", "DATE", "ISSUER", "SIGNATURE"]
 
 def load_model_and_processor():
     """Load the fine-tuned model and processor."""

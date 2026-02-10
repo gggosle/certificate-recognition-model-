@@ -181,8 +181,7 @@ class CertificateDataset(Dataset):
 
         #debug_draw(image, word_pixel_boxes, ground_truth)
         print(f"NER Tags: {ner_tags}")
-        print(words)
-        print(word_boxes)
+
 
         encoding = self.processor(
             image,
@@ -223,7 +222,7 @@ def main():
         image_dir=IMAGE_DIR,
         label_dir=LABEL_DIR,
         processor=processor,
-        label_list=["O", "NAME", "COURSE_NAME", "ISSUER", "DATE", "OTHER"]
+        label_list=["O", "COURSE_NAME", "ISSUER", "SIGNATURE"]
     )
 
     # Force-debug ONE sample
